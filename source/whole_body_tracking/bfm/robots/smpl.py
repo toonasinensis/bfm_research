@@ -24,7 +24,9 @@ SMPL_HUMANOID = ArticulationCfg(
             solver_velocity_iteration_count=0,
             sleep_threshold=0.005,
             stabilization_threshold=0.001,
-        ),
+        ), 
+         
+         
         copy_from_source=False,
     ),
     init_state=ArticulationCfg.InitialStateCfg(
