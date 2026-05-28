@@ -85,8 +85,10 @@ def humanoid_self_obs(
 
     body_pos = robot.data.body_pos_w[:, body_ids]
     body_rot = robot.data.body_quat_w[:, body_ids]
-    body_vel = robot.data.body_lin_vel_w[:, body_ids]
-    body_ang_vel = robot.data.body_ang_vel_w[:, body_ids]
+    # HumEnv's MuJoCo observation uses framelinvel/frameangvel sensors on xbody frames,
+    # which correspond more closely to IsaacLab link-frame velocities than COM velocities.
+    body_vel = robot.data.body_link_lin_vel_w[:, body_ids]
+    body_ang_vel = robot.data.body_link_ang_vel_w[:, body_ids]
 
     root_pos = body_pos[:, 0, :]
     root_rot = body_rot[:, 0, :]

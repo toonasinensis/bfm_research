@@ -16,7 +16,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Play the minimal HumEnv MJCF task with random actions.")
 parser.add_argument("--task", type=str, default="HumEnv-MJCF-Flat-v0", help="Gym task id.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
-parser.add_argument("--num_steps", type=int, default=10000, help="Maximum number of simulation steps.")
+parser.add_argument("--num_steps", type=int, default=1000, help="Maximum number of simulation steps.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -56,7 +56,10 @@ def main():
     while simulation_app.is_running() and step < args_cli.num_steps:
         with torch.inference_mode():
             action = torch.rand(env.unwrapped.num_envs, action_dim, device=env.unwrapped.device) * 2.0 - 1.0
+            print(f"[DEBUG] step={step} action={(action)}", flush=True)
+            # action = action*0.10
             obs, reward, terminated, truncated, info = env.step(action)
+            # import ipdb;ipdb.set_trace()
         if step == 0:
             print(f"[INFO] first_step_reward_shape={_describe_tree(reward)}")
             print(f"[INFO] first_step_done_shape={_describe_tree(terminated | truncated)}")

@@ -15,10 +15,13 @@ from isaaclab.utils import configclass
 from isaaclab.terrains import TerrainImporterCfg
 
 from bfm.robots.humenv_smpl import (
-    HUMENV_ACTION_OFFSET,
-    HUMENV_ACTION_SCALE,
+    HUMENV_ACTUATOR_BIAS0,
+    HUMENV_ACTUATOR_BIAS1,
+    HUMENV_ACTUATOR_BIAS2,
+    HUMENV_ACTUATOR_GAIN,
     HUMENV_ACTUATOR_JOINT_NAMES,
     HUMENV_BODY_NAMES,
+    HUMENV_EFFORT_LIMIT,
     HUMENV_SMPL_MJCF_CFG,
 )
 import bfm.tasks.humenv.mdp as mdp
@@ -32,10 +35,10 @@ class HumEnvSceneCfg(InteractiveSceneCfg):
         terrain_type="plane",
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
+            friction_combine_mode="average",
+            restitution_combine_mode="average",
+            static_friction=0.7,
+            dynamic_friction=0.7,
         ),
         visual_material=sim_utils.MdlFileCfg(
             mdl_path="{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl",
@@ -55,22 +58,28 @@ class HumEnvSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    """No commands are required for the minimal HumEnv task."""
+    """HumEnv reference motion command."""
 
-    pass
+    motion = mdp.HumEnvMotionCommandCfg(
+        asset_name="robot",
+        body_names=HUMENV_BODY_NAMES,
+        anchor_body_name="Pelvis",
+    )
 
 
 @configclass
 class ActionsCfg:
     """Action terms matching HumEnv's XML affine actuators."""
 
-    joint_pos = mdp.JointPositionActionCfg(
+    joint_pos = mdp.HumEnvAffineTorqueActionCfg(
         asset_name="robot",
         joint_names=HUMENV_ACTUATOR_JOINT_NAMES,
-        scale=HUMENV_ACTION_SCALE,
-        offset=HUMENV_ACTION_OFFSET,
         preserve_order=True,
-        use_default_offset=False,
+        gain=HUMENV_ACTUATOR_GAIN,
+        bias0=HUMENV_ACTUATOR_BIAS0,
+        bias1=HUMENV_ACTUATOR_BIAS1,
+        bias2=HUMENV_ACTUATOR_BIAS2,
+        effort_limit=HUMENV_EFFORT_LIMIT,
     )
 
 

@@ -29,12 +29,13 @@
 docker/artifacts/
 *.tmp
 
+tmp_fbcpr/*
 # Isaac-Sim packman
 _isaac_sim*
 _repo
 _build
 .lastformat
-
+*.hdf5
 *.csv
 *.pkl
 *.zarr
