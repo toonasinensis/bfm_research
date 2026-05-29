@@ -28,8 +28,13 @@
 **/.neptune/*
 docker/artifacts/
 *.tmp
+MUJOCO_LOG.TXT
 
 tmp_fbcpr/*
+tmp_fbcpr_g1/*
+tmp_fbcpr_humenv/*
+logs/tmp_fbcpr/*
+logs/tmp_fbcpr_g1/*
 # Isaac-Sim packman
 _isaac_sim*
 _repo
@@ -40,6 +45,7 @@ _build
 *.pkl
 *.zarr
 *.npz
+
 
 **/assets/
 artifacts/

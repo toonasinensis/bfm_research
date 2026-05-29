@@ -2,6 +2,8 @@
 
 Always read this file before running IsaacLab/HumEnv commands in this repo.
 
+Also read `docs/fbcpr_system_notes.md` before touching FB-CPR training, G1, tracking inference, MuJoCo rollout, or output-directory conventions. It is the long-lived context for the current port.
+
 ## Environment
 
 - Use the `mimic` conda environment.
@@ -56,6 +58,15 @@ Motion root:
 
 The txt file contains relative `.hdf5` names, so always pass both `--motions` and `--motions-root`.
 
+G1 LAFAN training data:
+
+```text
+/home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan
+```
+
+This directory contains `.npz` episodes with `joint_pos`, `joint_vel`, `body_pos_w`, `body_quat_w`,
+`body_lin_vel_w`, and `body_ang_vel_w`.
+
 ## Current FB-CPR Smoke Command
 
 Run from `/home/chn/hajimi/bfm_research`:
@@ -106,6 +117,76 @@ python scripts/train_fbcpr_humenv.py \
 ```
 
 For an online run after W&B is logged in, add `--use-wandb` and scale `--online-parallel-envs`, `--num-env-steps`, and checkpoint/log intervals together.
+
+## G1 FB-CPR
+
+G1 uses the same FB-CPR runner/adapter as HumEnv. The task-specific pieces live under
+`source/whole_body_tracking/bfm/tasks/g1`: `G1LafanEnvCfg`, `G1LafanMotionCommand`, the LAFAN loader, and the G1
+self-observation. The expert observation and online observation are both built by the shared
+`body_self_obs_from_tensors()` helper, so body-order bugs are easier to catch.
+
+Before training G1 after touching body names, robot import, or the LAFAN loader, run the parity check:
+
+```bash
+source /home/chn/miniforge3/etc/profile.d/conda.sh
+conda activate mimic
+python scripts/check_g1_lafan_obs_parity.py \
+  --headless \
+  --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan \
+  --motion-index 0 \
+  --frame 0 \
+  --num-envs 1 \
+  --device cuda \
+  --output /tmp/g1_lafan_parity.npz
+```
+
+Expected signs from the current implementation:
+
+```text
+obs_shape=(1, 208)
+obs mse=0.00000000
+body_pos mean~=0 max~=0
+robot_name=<name> cfg_name=<same name>
+```
+
+Use `--debug-vis` without `--headless` to show current robot body frames and expert body frames in the viewer. GUI
+debug keeps the viewer open by default. Add `--play-motion` to animate the LAFAN frames, or `--hold` to keep a
+single frame open explicitly:
+
+```bash
+python scripts/check_g1_lafan_obs_parity.py \
+  --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan \
+  --motion-index 0 \
+  --frame 0 \
+  --num-envs 1 \
+  --device cuda \
+  --debug-vis \
+  --play-motion \
+  --print-every 120
+```
+
+G1 smoke training command:
+
+```bash
+source /home/chn/miniforge3/etc/profile.d/conda.sh
+conda activate mimic
+python scripts/train_fbcpr_g1.py \
+  --headless \
+  --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan \
+  --online-parallel-envs 1 \
+  --num-env-steps 80 \
+  --num-seed-steps 16 \
+  --update-agent-every 16 \
+  --num-agent-updates 1 \
+  --log-every-updates 16 \
+  --checkpoint-every-steps 80 \
+  --device cuda \
+  --agent-device cuda \
+  --buffer-device cpu
+```
+
+This smoke has been verified to load 40 LAFAN episodes, run FB-CPR updates, and write
+`checkpoint/model/model.safetensors`.
 
 ## HumEnv Reset Parity
 
@@ -193,7 +274,7 @@ source /home/chn/miniforge3/etc/profile.d/conda.sh
 conda activate mimic
 python scripts/tracking_inference_fbcpr_humenv.py \
   --headless \
-  --checkpoint /home/chn/hajimi/bfm_research/tmp_fbcpr/B13105BCD7/checkpoint \
+  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr/B13105BCD7/checkpoint \
   --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/accad_generated_train.txt \
   --motions-root /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/humenv_amass \
   --motion-index 0 \
@@ -221,7 +302,7 @@ For render mode, omit `--headless`. This has been smoke-tested with:
 source /home/chn/miniforge3/etc/profile.d/conda.sh
 conda activate mimic
 python scripts/tracking_inference_fbcpr_humenv.py \
-  --checkpoint /home/chn/hajimi/bfm_research/tmp_fbcpr/B13105BCD7/checkpoint \
+  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr/B13105BCD7/checkpoint \
   --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/accad_generated_train.txt \
   --motions-root /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/humenv_amass \
   --motion-index 0 \

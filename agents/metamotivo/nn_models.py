@@ -3,6 +3,8 @@
 # This source code is licensed under the CC BY-NC 4.0 license found in the
 # LICENSE file in the root directory of this source tree.
 
+import dataclasses
+
 import torch
 from torch import nn
 from torch import distributions as pyd
@@ -500,3 +502,41 @@ class Norm(nn.Module):
 
     def forward(self, x) -> torch.Tensor:
         return math.sqrt(x.shape[-1]) * F.normalize(x, dim=-1)
+
+
+class EMA(nn.Module):
+    """Exponential moving average normalizer used for scalar auxiliary rewards."""
+
+    def __init__(self, tau=0.99, epsilon=1e-8, shape=(1,), translate=False, scale=False) -> None:
+        super().__init__()
+        self.tau = tau
+        self.epsilon = epsilon
+        self.register_buffer("mean", torch.zeros(shape, dtype=torch.float32))
+        self.register_buffer("mean_square", torch.zeros(shape, dtype=torch.float32))
+        self.register_buffer("counter", torch.LongTensor([0]))
+        self.translate = translate
+        self.scale = scale
+
+    def forward(self, x):
+        mean = x.mean()
+        mean_square = x.pow(2).mean()
+        self.mean.data = self.tau * self.mean + (1 - self.tau) * mean
+        self.mean_square.data = self.tau * self.mean_square + (1 - self.tau) * mean_square
+        self.counter += 1  # type: ignore
+        norm = 1 - self.tau**self.counter
+        ema_mean = self.mean / norm
+        ema_mean_square = self.mean_square / norm
+        var = torch.clamp(ema_mean_square - ema_mean**2, min=self.epsilon)
+
+        translate_mean = ema_mean if self.translate else 0
+        scale_std = torch.sqrt(var) if self.scale else 1
+        return (x - translate_mean) / scale_std
+
+
+@dataclasses.dataclass
+class RewardNormalizerConfig:
+    translate: bool = False
+    scale: bool = False
+
+    def build(self) -> nn.Module:
+        return EMA(translate=self.translate, scale=self.scale)

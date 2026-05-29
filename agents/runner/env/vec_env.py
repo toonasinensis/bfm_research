@@ -83,7 +83,13 @@ class IsaacLabVecEnvAdapter(VecEnv):
     def get_observations(self) -> tuple[torch.Tensor, dict]:
         if hasattr(self.unwrapped, "get_observations"):
             return unpack_observations(self.unwrapped.get_observations())
+        if hasattr(self.unwrapped, "observation_manager"):
+            obs = self.unwrapped.observation_manager.compute()
+            extras = getattr(self.unwrapped, "extras", {})
+            self.episode_length_buf = self.unwrapped.episode_length_buf
+            return unpack_observations(obs, extras)
         obs, extras = self.env.reset()
+        self.episode_length_buf = self.unwrapped.episode_length_buf
         return unpack_observations(obs, extras)
 
     def reset(self) -> tuple[torch.Tensor, dict]:
@@ -97,9 +103,26 @@ class IsaacLabVecEnvAdapter(VecEnv):
         extras = dict(extras)
         extras["terminated"] = terminated
         extras["truncated"] = truncated
+        self._attach_aux_rewards(extras)
         self.episode_length_buf = self.unwrapped.episode_length_buf
         next_obs, extras = unpack_observations(obs, extras)
         return next_obs, rewards, done, extras
 
     def close(self) -> None:
         self.env.close()
+
+    def _attach_aux_rewards(self, extras: dict) -> None:
+        if "aux_rewards" in extras:
+            return
+        reward_manager = getattr(self.unwrapped, "reward_manager", None)
+        if reward_manager is None:
+            return
+        term_names = getattr(reward_manager, "_term_names", None)
+        step_reward = getattr(reward_manager, "_step_reward", None)
+        if not term_names or step_reward is None or step_reward.shape[1] != len(term_names):
+            return
+        extras["aux_rewards"] = {
+            name: step_reward[:, index].reshape(-1, 1).detach().clone()
+            for index, name in enumerate(term_names)
+            if not name.startswith("_")
+        }

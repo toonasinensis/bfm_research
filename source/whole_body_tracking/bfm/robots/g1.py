@@ -8,6 +8,10 @@ ARMATURE_5020 = 0.003609725
 ARMATURE_7520_14 = 0.010177520
 ARMATURE_7520_22 = 0.025101925
 ARMATURE_4010 = 0.00425
+BFM_ZERO_ACTION_SCALE = 0.25
+BFM_ZERO_NORMALIZE_ACTION_TO = 5.0
+BFM_ZERO_WAIST_STIFFNESS = 300.0
+BFM_ZERO_WAIST_DAMPING = 5.0
 
 NATURAL_FREQ = 10 * 2.0 * 3.1415926535  # 10Hz
 DAMPING_RATIO = 2.0
@@ -80,19 +84,19 @@ G1_CYLINDER_CFG = ArticulationCfg(
                 ".*_knee_joint": 20.0,
             },
             stiffness={
-                ".*_hip_pitch_joint": STIFFNESS_7520_14,
+                ".*_hip_pitch_joint": STIFFNESS_7520_22,
                 ".*_hip_roll_joint": STIFFNESS_7520_22,
                 ".*_hip_yaw_joint": STIFFNESS_7520_14,
                 ".*_knee_joint": STIFFNESS_7520_22,
             },
             damping={
-                ".*_hip_pitch_joint": DAMPING_7520_14,
+                ".*_hip_pitch_joint": DAMPING_7520_22,
                 ".*_hip_roll_joint": DAMPING_7520_22,
                 ".*_hip_yaw_joint": DAMPING_7520_14,
                 ".*_knee_joint": DAMPING_7520_22,
             },
             armature={
-                ".*_hip_pitch_joint": ARMATURE_7520_14,
+                ".*_hip_pitch_joint": ARMATURE_7520_22,
                 ".*_hip_roll_joint": ARMATURE_7520_22,
                 ".*_hip_yaw_joint": ARMATURE_7520_14,
                 ".*_knee_joint": ARMATURE_7520_22,
@@ -110,16 +114,16 @@ G1_CYLINDER_CFG = ArticulationCfg(
             effort_limit_sim=50,
             velocity_limit_sim=37.0,
             joint_names_expr=["waist_roll_joint", "waist_pitch_joint"],
-            stiffness=2.0 * STIFFNESS_5020,
-            damping=2.0 * DAMPING_5020,
+            stiffness=BFM_ZERO_WAIST_STIFFNESS,
+            damping=BFM_ZERO_WAIST_DAMPING,
             armature=2.0 * ARMATURE_5020,
         ),
         "waist_yaw": ImplicitActuatorCfg(
             effort_limit_sim=88,
             velocity_limit_sim=32.0,
             joint_names_expr=["waist_yaw_joint"],
-            stiffness=STIFFNESS_7520_14,
-            damping=DAMPING_7520_14,
+            stiffness=BFM_ZERO_WAIST_STIFFNESS,
+            damping=BFM_ZERO_WAIST_DAMPING,
             armature=ARMATURE_7520_14,
         ),
         "arms": ImplicitActuatorCfg(
@@ -192,4 +196,6 @@ for a in G1_CYLINDER_CFG.actuators.values():
         s = {n: s for n in names}
     for n in names:
         if n in e and n in s and s[n]:
-            G1_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
+            # BFM-Zero first maps policy actions from [-1, 1] to [-5, 5], then applies
+            # action_scale * effort / stiffness before sending implicit PD joint targets.
+            G1_ACTION_SCALE[n] = BFM_ZERO_NORMALIZE_ACTION_TO * BFM_ZERO_ACTION_SCALE * e[n] / s[n]
