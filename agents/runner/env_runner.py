@@ -214,12 +214,18 @@ class CheckpointHook(RunnerHook):
     def on_step_end(self, runner: "EnvRunner", transition: Transition) -> None:
         del transition
         if runner.step % self.every_steps == 0:
-            print(f"[CheckpointHook] step={runner.step} saving={self.output_dir / self.name}", flush=True)
-            runner.algorithm.save(self.output_dir / self.name)
+            path = self.output_dir / self.name
+            start_time = time.time()
+            print(f"[CheckpointHook] step={runner.step} saving={path}", flush=True)
+            runner.algorithm.save(path)
+            print(f"[CheckpointHook] step={runner.step} save_done duration={time.time() - start_time:.2f}s", flush=True)
 
     def on_train_end(self, runner: "EnvRunner") -> None:
-        print(f"[CheckpointHook] train_end saving={self.output_dir / self.name}", flush=True)
-        runner.algorithm.save(self.output_dir / self.name)
+        path = self.output_dir / self.name
+        start_time = time.time()
+        print(f"[CheckpointHook] train_end saving={path}", flush=True)
+        runner.algorithm.save(path)
+        print(f"[CheckpointHook] train_end save_done duration={time.time() - start_time:.2f}s", flush=True)
 
 
 class EvalHook(RunnerHook):
@@ -369,42 +375,50 @@ class EnvRunner:
         for hook in self.hooks:
             hook.on_train_start(self)
 
-        while self.step < num_env_steps:
-            step_count = self.env.episode_length_buf.clone().to(obs.device).reshape(-1, 1)
-            policy_extras = dict(extras)
-            policy_extras["step_count"] = step_count
-            action, rollout_context = self.algorithm.act(obs, policy_extras, self.step)
-            next_obs, reward, next_done, next_extras = self.env.step(action)
-            terminated = next_extras.get("terminated", next_done)
-            truncated = next_extras.get("truncated", torch.zeros_like(next_done))
-            transition = Transition(
-                obs=obs,
-                action=action,
-                reward=reward,
-                done=next_done,
-                terminated=terminated,
-                truncated=truncated,
-                extras=next_extras,
-                next_obs=next_obs,
-                step_count=step_count,
-                valid=torch.logical_not(done).reshape(-1),
-            )
-            self.algorithm.record_transition(transition, rollout_context)
+        try:
+            while self.step < num_env_steps:
+                step_count = self.env.episode_length_buf.clone().to(obs.device).reshape(-1, 1)
+                policy_extras = dict(extras)
+                policy_extras["step_count"] = step_count
+                action, rollout_context = self.algorithm.act(obs, policy_extras, self.step)
+                next_obs, reward, next_done, next_extras = self.env.step(action)
+                terminated = next_extras.get("terminated", next_done)
+                truncated = next_extras.get("truncated", torch.zeros_like(next_done))
+                transition = Transition(
+                    obs=obs,
+                    action=action,
+                    reward=reward,
+                    done=next_done,
+                    terminated=terminated,
+                    truncated=truncated,
+                    extras=next_extras,
+                    next_obs=next_obs,
+                    step_count=step_count,
+                    valid=torch.logical_not(done).reshape(-1),
+                )
+                self.algorithm.record_transition(transition, rollout_context)
 
-            self.step += self.env.num_envs
-            if self.algorithm.ready_to_update(self.step):
-                metrics = self.algorithm.update(self.step)
+                self.step += self.env.num_envs
+                if self.algorithm.ready_to_update(self.step):
+                    metrics = self.algorithm.update(self.step)
+                    for hook in self.hooks:
+                        hook.on_update_end(self, metrics)
+
                 for hook in self.hooks:
-                    hook.on_update_end(self, metrics)
-
-            for hook in self.hooks:
-                hook.on_step_end(self, transition)
-            if self._observation_refresh_requested:
-                obs, extras = self.env.get_observations()
-                done = torch.zeros(self.env.num_envs, dtype=torch.bool, device=obs.device)
-                self._observation_refresh_requested = False
-            else:
-                obs, extras, done = next_obs, next_extras, next_done
+                    hook.on_step_end(self, transition)
+                if self._observation_refresh_requested:
+                    obs, extras = self.env.get_observations()
+                    done = torch.zeros(self.env.num_envs, dtype=torch.bool, device=obs.device)
+                    self._observation_refresh_requested = False
+                else:
+                    obs, extras, done = next_obs, next_extras, next_done
+        except Exception as exc:
+            print(
+                f"[EnvRunner] train_loop_exception type={type(exc).__name__} repr={exc!r} "
+                f"step={self.step} target={num_env_steps}",
+                flush=True,
+            )
+            raise
 
         for hook in self.hooks:
             hook.on_train_end(self)

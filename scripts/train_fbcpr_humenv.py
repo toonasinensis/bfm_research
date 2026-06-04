@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as _datetime
 import json
 import random
+import shutil
 import sys
 import argparse
+import subprocess
 import uuid
 from dataclasses import field
 from pathlib import Path
@@ -31,6 +34,7 @@ class TrainConfig:
     online_parallel_envs: int = 50
     log_every_updates: int = 100_000
     work_dir: str | None = None
+    run_name: str | None = None
     num_env_steps: int = 30_000_000
     update_agent_every: int | None = None
     num_seed_steps: int | None = None
@@ -66,6 +70,8 @@ class TrainConfig:
     tracking_eval_max_steps: int = 0
     tracking_eval_mean_action: bool = True
     tracking_eval_progress: bool = True
+    tracking_eval_print_assignments: bool = False
+    tracking_eval_print_assignment_limit: int = 64
 
     model: str = "simple"
     hidden_dim: int = 1024
@@ -201,6 +207,7 @@ def parse_args() -> tuple[argparse.Namespace, TrainConfig]:
     parser.add_argument("--online-parallel-envs", type=int, default=cfg.online_parallel_envs)
     parser.add_argument("--log-every-updates", type=int, default=cfg.log_every_updates)
     parser.add_argument("--work-dir", type=str, default=cfg.work_dir)
+    parser.add_argument("--run-name", type=str, default=cfg.run_name, help="Stable run name used for the default log folder and W&B run name.")
     parser.add_argument("--num-env-steps", type=int, default=cfg.num_env_steps)
     _add_optional_int(parser, "--update-agent-every", cfg.update_agent_every, "Agent update interval in env steps.")
     _add_optional_int(parser, "--num-seed-steps", cfg.num_seed_steps, "Random-action seed steps.")
@@ -232,6 +239,18 @@ def parse_args() -> tuple[argparse.Namespace, TrainConfig]:
     parser.add_argument("--tracking-eval-max-steps", type=int, default=cfg.tracking_eval_max_steps)
     parser.add_argument("--tracking-eval-sample-action", action="store_false", dest="tracking_eval_mean_action", default=cfg.tracking_eval_mean_action)
     parser.add_argument("--no-tracking-eval-progress", action="store_false", dest="tracking_eval_progress", default=cfg.tracking_eval_progress)
+    parser.add_argument(
+        "--tracking-eval-print-assignments",
+        action="store_true",
+        default=cfg.tracking_eval_print_assignments,
+        help="Print env-to-motion assignment for vectorized tracking eval chunks.",
+    )
+    parser.add_argument(
+        "--tracking-eval-print-assignment-limit",
+        type=int,
+        default=cfg.tracking_eval_print_assignment_limit,
+        help="Maximum assignment rows to print per eval chunk when assignment printing is enabled.",
+    )
     parser.add_argument("--model", type=str, default=cfg.model)
     parser.add_argument("--hidden-dim", type=int, default=cfg.hidden_dim)
     parser.add_argument("--hidden-layers", type=int, default=cfg.hidden_layers)
@@ -302,6 +321,7 @@ def parse_args() -> tuple[argparse.Namespace, TrainConfig]:
     cfg.online_parallel_envs = args.online_parallel_envs
     cfg.log_every_updates = args.log_every_updates
     cfg.work_dir = args.work_dir
+    cfg.run_name = args.run_name
     cfg.num_env_steps = args.num_env_steps
     cfg.update_agent_every = args.update_agent_every
     cfg.num_seed_steps = args.num_seed_steps
@@ -333,6 +353,8 @@ def parse_args() -> tuple[argparse.Namespace, TrainConfig]:
     cfg.tracking_eval_max_steps = args.tracking_eval_max_steps
     cfg.tracking_eval_mean_action = args.tracking_eval_mean_action
     cfg.tracking_eval_progress = args.tracking_eval_progress
+    cfg.tracking_eval_print_assignments = args.tracking_eval_print_assignments
+    cfg.tracking_eval_print_assignment_limit = args.tracking_eval_print_assignment_limit
     cfg.model = args.model
     cfg.hidden_dim = args.hidden_dim
     cfg.hidden_layers = args.hidden_layers
@@ -399,7 +421,7 @@ def set_seed_everywhere(seed: int) -> None:
 
 def make_work_dir(cfg: TrainConfig) -> Path:
     if cfg.work_dir is None:
-        tmp_name = uuid.uuid4().hex[:10].upper()
+        tmp_name = cfg.run_name or uuid.uuid4().hex[:10].upper()
         output_name = "tmp_fbcpr_g1" if cfg.task == "g1" else "tmp_fbcpr"
         work_dir = Path.cwd() / "logs" / output_name / tmp_name
         cfg.work_dir = str(work_dir)
@@ -407,6 +429,100 @@ def make_work_dir(cfg: TrainConfig) -> Path:
         work_dir = Path(cfg.work_dir)
     work_dir.mkdir(exist_ok=True, parents=True)
     return work_dir
+
+
+def _run_for_provenance(cmd: list[str], cwd: Path) -> dict[str, object]:
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=False)
+    except Exception as exc:
+        return {"cmd": cmd, "returncode": None, "stdout": "", "stderr": repr(exc)}
+    return {
+        "cmd": cmd,
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+
+
+def _write_provenance_command(provenance_dir: Path, name: str, result: dict[str, object]) -> None:
+    text = str(result.get("stdout") or "")
+    stderr = str(result.get("stderr") or "")
+    if stderr:
+        text += "\n--- stderr ---\n" + stderr
+    (provenance_dir / name).write_text(text, encoding="utf-8")
+
+
+def _is_snapshot_source_file(path: str) -> bool:
+    blocked_prefixes = (
+        "logs/",
+        "wandb/",
+        "pretrained/",
+        "tmp_fbcpr",
+        "source/whole_body_tracking/bfm/data/",
+    )
+    if path.startswith(blocked_prefixes):
+        return False
+    allowed_prefixes = ("agents/", "scripts/", "source/", "docs/")
+    allowed_names = {"README.md", "pyproject.toml", "setup.py", "setup.cfg"}
+    allowed_suffixes = (".py", ".md", ".yaml", ".yml", ".json", ".toml", ".txt", ".cfg", ".ini")
+    return path in allowed_names or (path.startswith(allowed_prefixes) and path.endswith(allowed_suffixes))
+
+
+def save_run_provenance(work_dir: Path, cfg: TrainConfig, args_cli: argparse.Namespace) -> None:
+    provenance_dir = work_dir / "provenance"
+    provenance_dir.mkdir(exist_ok=True, parents=True)
+
+    git_results = {
+        "rev_parse_head": _run_for_provenance(["git", "rev-parse", "HEAD"], PROJECT_DIR),
+        "branch": _run_for_provenance(["git", "branch", "--show-current"], PROJECT_DIR),
+        "status_short": _run_for_provenance(["git", "status", "--short"], PROJECT_DIR),
+        "remote": _run_for_provenance(["git", "remote", "-v"], PROJECT_DIR),
+        "diff": _run_for_provenance(["git", "diff", "--binary"], PROJECT_DIR),
+        "diff_cached": _run_for_provenance(["git", "diff", "--cached", "--binary"], PROJECT_DIR),
+        "untracked": _run_for_provenance(["git", "ls-files", "--others", "--exclude-standard"], PROJECT_DIR),
+        "tracked": _run_for_provenance(["git", "ls-files"], PROJECT_DIR),
+    }
+    _write_provenance_command(provenance_dir, "git_status.txt", git_results["status_short"])
+    _write_provenance_command(provenance_dir, "git_remote.txt", git_results["remote"])
+    _write_provenance_command(provenance_dir, "git_diff.patch", git_results["diff"])
+    _write_provenance_command(provenance_dir, "git_diff_cached.patch", git_results["diff_cached"])
+    _write_provenance_command(provenance_dir, "git_untracked_files.txt", git_results["untracked"])
+
+    metadata = {
+        "created_at": _datetime.datetime.now(_datetime.timezone.utc).isoformat(),
+        "cwd": str(Path.cwd()),
+        "project_dir": str(PROJECT_DIR),
+        "python": sys.executable,
+        "argv": sys.argv,
+        "app_launcher_device": getattr(args_cli, "device", None),
+        "config": dataclasses.asdict(cfg),
+        "git": {
+            "commit": str(git_results["rev_parse_head"].get("stdout", "")).strip(),
+            "branch": str(git_results["branch"].get("stdout", "")).strip(),
+            "dirty": bool(str(git_results["status_short"].get("stdout", "")).strip()),
+        },
+    }
+    with (provenance_dir / "metadata.json").open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=4)
+
+    snapshot_dir = provenance_dir / "source_snapshot"
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    snapshot_dir.mkdir(parents=True)
+    snapshot_files: list[str] = []
+    tracked_files = str(git_results["tracked"].get("stdout", "") or "").splitlines()
+    untracked_files = str(git_results["untracked"].get("stdout", "") or "").splitlines()
+    for rel_path in sorted(set(tracked_files + untracked_files)):
+        if not _is_snapshot_source_file(rel_path):
+            continue
+        source = PROJECT_DIR / rel_path
+        if not source.is_file() or source.stat().st_size > 2_000_000:
+            continue
+        target = snapshot_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        snapshot_files.append(rel_path)
+    (provenance_dir / "source_snapshot_files.txt").write_text("\n".join(snapshot_files) + "\n", encoding="utf-8")
 
 
 def make_tracking_evaluator(cfg: TrainConfig, agent, raw_env):
@@ -453,6 +569,7 @@ def main() -> None:
 
     with (work_dir / "config.json").open("w") as f:
         json.dump(dataclasses.asdict(cfg), f, indent=4)
+    save_run_provenance(work_dir, cfg, args_cli)
 
     if cfg.use_wandb:
         if wandb is None:
@@ -462,7 +579,7 @@ def main() -> None:
                 entity=cfg.wandb_ename,
                 project=cfg.wandb_pname,
                 group=cfg.wandb_gname,
-                name=f"fbcpr-{cfg.task}-{work_dir.name}",
+                name=cfg.run_name or f"fbcpr-{cfg.task}-{work_dir.name}",
                 config=dataclasses.asdict(cfg),
                 anonymous="allow",
             )
@@ -502,7 +619,10 @@ def main() -> None:
         ProgressHook(enabled=cfg.progress, desc=f"{cfg.task} rollout"),
         EvalHook(every_steps=cfg.eval_every_steps, enabled=cfg.evaluate, use_wandb=cfg.use_wandb, evaluator=evaluator),
         LogHook(every_steps=cfg.log_every_updates, use_wandb=cfg.use_wandb),
-        CheckpointHook(every_steps=cfg.checkpoint_every_steps, output_dir=work_dir),
+        CheckpointHook(
+            every_steps=cfg.checkpoint_every_steps,
+            output_dir=work_dir,
+        ),
     ]
 
     try:

@@ -15,6 +15,7 @@ class HumEnvFBcprRunnerCfg:
     online_parallel_envs: int = 50
     log_every_updates: int = 5000
     work_dir: str | None = None
+    run_name: str | None = None
     num_env_steps: int = 30_000_000
     update_agent_every: int | None = None
     num_seed_steps: int | None = None
@@ -50,6 +51,8 @@ class HumEnvFBcprRunnerCfg:
     tracking_eval_max_steps: int = 0
     tracking_eval_mean_action: bool = True
     tracking_eval_progress: bool = True
+    tracking_eval_print_assignments: bool = False
+    tracking_eval_print_assignment_limit: int = 64
 
     model: str = "simple"
     hidden_dim: int = 1024
@@ -103,6 +106,9 @@ class HumEnvFBcprRunnerCfg:
     norm_aux_reward_scale: bool = True
     aux_rewards: list[str] = field(default_factory=list)
     aux_rewards_scaling: dict[str, float] = field(default_factory=dict)
+    motion_reset: bool = True
+    fall_prob: float = 0.2
+    fall_height: float = 0.35
 
     reward_eval_tasks: list[str] = field(
         default_factory=lambda: [
@@ -137,12 +143,12 @@ class G1FBcprRunnerCfg(HumEnvFBcprRunnerCfg):
     wandb_pname: str | None = "fbcpr_g1"
     buffer_size: int = 2000_000
     online_parallel_envs: int = 1024
-    log_every_updates: int = 10_240
+    log_every_updates: int = 10_24 * 50
     num_env_steps: int = 384_000_000
     update_agent_every: int | None = 1024
     num_seed_steps: int | None = 10_240
     num_agent_updates: int | None = 16
-    checkpoint_every_steps: int = 1024 * 300
+    checkpoint_every_steps: int = 1024 * 500
     buffer_device: str = "cuda"
     env_id: str = "G1-LAFAN-Flat-v0"
     env_cfg_entry_point: str = "bfm.tasks.g1.g1_env_cfg:G1LafanEnvCfg"
@@ -150,13 +156,13 @@ class G1FBcprRunnerCfg(HumEnvFBcprRunnerCfg):
     expert_buffer_entry_point: str = "bfm.tasks.g1.config.fb_cpr:make_expert_buffer"
     agent_class_entry_point: str = "agents.metamotivo.fb_cpr_aux:FBcprAuxAgent"
     agent_config_builder_entry_point: str = "bfm.config.fb_cpr:build_fbcpr_aux_agent_config"
-    eval_every_steps: int = 1024 * 100
+    eval_every_steps: int = 1024 * 500
     tracking_eval_entry_point: str = "bfm.tasks.g1.eval.fbcpr_tracking:make_tracking_evaluator"
     tracking_eval_num_envs: int = 1024
     tracking_eval_motions: str = ""
     tracking_eval_motions_root: str = ""
-    tracking_eval_max_motions: int = 8
-    tracking_eval_max_steps: int = 128
+    tracking_eval_max_motions: int = 80000
+    tracking_eval_max_steps: int = 12800000
     tracking_eval_mean_action: bool = True
     tracking_eval_progress: bool = True
 

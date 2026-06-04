@@ -175,8 +175,8 @@ class HumEnvTrackingEvaluator:
 
         try:
             model.train(False)
-            with torch.inference_mode():
-                for motion_index in iterator:
+            for motion_index in iterator:
+                with torch.no_grad():
                     episode = command.motion.episodes[motion_index]
                     reference_obs = episode["observation"].to(device=device, dtype=torch.float32)
                     if reference_obs.ndim != 2:
@@ -189,47 +189,48 @@ class HumEnvTrackingEvaluator:
                         continue
 
                     z_reference = model.tracking_inference(reference_obs[1:])
-                    self.env.reset()
-                    eval_env_ids = _set_motion_frame(command, unwrapped, motion_index, frame=0, env_count=eval_env_count)
-                    obs, _ = unpack_observations(unwrapped.observation_manager.compute())
-                    obs = obs[eval_env_ids].to(device=device, dtype=torch.float32)
+                self.env.reset()
+                eval_env_ids = _set_motion_frame(command, unwrapped, motion_index, frame=0, env_count=eval_env_count)
+                obs, _ = unpack_observations(unwrapped.observation_manager.compute())
+                obs = obs[eval_env_ids].to(device=device, dtype=torch.float32)
 
-                    rollout_steps = min(reference_obs.shape[0] - 1, z_reference.shape[0])
-                    if self.cfg.tracking_eval_max_steps and self.cfg.tracking_eval_max_steps > 0:
-                        rollout_steps = min(rollout_steps, self.cfg.tracking_eval_max_steps)
+                rollout_steps = min(reference_obs.shape[0] - 1, z_reference.shape[0])
+                if self.cfg.tracking_eval_max_steps and self.cfg.tracking_eval_max_steps > 0:
+                    rollout_steps = min(rollout_steps, self.cfg.tracking_eval_max_steps)
 
-                    rollout_obs = []
-                    rollout_target = []
-                    for local_step in range(rollout_steps):
-                        z = z_reference[local_step].reshape(1, -1).expand(eval_env_count, -1)
+                rollout_obs = []
+                rollout_target = []
+                for local_step in range(rollout_steps):
+                    z = z_reference[local_step].reshape(1, -1).expand(eval_env_count, -1)
+                    with torch.no_grad():
                         eval_action = model.act(obs=obs, z=z, mean=self.cfg.tracking_eval_mean_action).to(unwrapped.device)
-                        action = torch.zeros(
-                            unwrapped.num_envs,
-                            unwrapped.action_manager.total_action_dim,
-                            dtype=eval_action.dtype,
-                            device=unwrapped.device,
-                        )
-                        action[eval_env_ids] = eval_action
-                        next_obs_raw, reward, terminated, truncated, info = self.env.step(action)
-                        del reward, info
-                        done = torch.logical_or(terminated, truncated)[eval_env_ids]
-                        next_obs, _ = unpack_observations(next_obs_raw)
-                        obs = next_obs[eval_env_ids].to(device=device, dtype=torch.float32)
+                    action = torch.zeros(
+                        unwrapped.num_envs,
+                        unwrapped.action_manager.total_action_dim,
+                        dtype=eval_action.dtype,
+                        device=unwrapped.device,
+                    )
+                    action[eval_env_ids] = eval_action
+                    next_obs_raw, reward, terminated, truncated, info = self.env.step(action)
+                    del reward, info
+                    done = torch.logical_or(terminated, truncated)[eval_env_ids]
+                    next_obs, _ = unpack_observations(next_obs_raw)
+                    obs = next_obs[eval_env_ids].to(device=device, dtype=torch.float32)
 
-                        reference_step = min(local_step + 1, reference_obs.shape[0] - 1)
-                        target = reference_obs[reference_step].reshape(1, -1).expand_as(obs)
-                        obs_error = obs - target
-                        rollout_obs.append(obs.detach().cpu())
-                        rollout_target.append(target.detach().cpu())
-                        metrics["obs_distance"].append(float(torch.norm(obs_error, dim=-1).mean().item()))
-                        metrics["obs_mse"].append(float(obs_error.square().mean().item()))
-                        metrics["obs_emd"].append(float(_greedy_emd(obs.detach().cpu(), target.detach().cpu()).item()))
-                        nan_count += _finite_count(obs, eval_action)
-                        done_steps += int(done.any().item())
-                        total_steps += 1
-                        if bool(done.any().item()):
-                            break
-                    _append_humenv_bench_metrics(metrics, rollout_obs, rollout_target)
+                    reference_step = min(local_step + 1, reference_obs.shape[0] - 1)
+                    target = reference_obs[reference_step].reshape(1, -1).expand_as(obs)
+                    obs_error = obs - target
+                    rollout_obs.append(obs.detach().cpu())
+                    rollout_target.append(target.detach().cpu())
+                    metrics["obs_distance"].append(float(torch.norm(obs_error, dim=-1).mean().item()))
+                    metrics["obs_mse"].append(float(obs_error.square().mean().item()))
+                    metrics["obs_emd"].append(float(_greedy_emd(obs.detach().cpu(), target.detach().cpu()).item()))
+                    nan_count += _finite_count(obs, eval_action)
+                    done_steps += int(done.any().item())
+                    total_steps += 1
+                    if bool(done.any().item()):
+                        break
+                _append_humenv_bench_metrics(metrics, rollout_obs, rollout_target)
         finally:
             model.train(previous_training)
 

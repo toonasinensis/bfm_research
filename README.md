@@ -193,6 +193,20 @@ body_pos mean~=0 max~=0
 robot_name=<name> cfg_name=<same name>
 ```
 
+Full G1 eval assignment debug:
+
+```bash
+python scripts/debug_g1_eval_parallel.py \
+  --headless \
+  --checkpoint logs/tmp_fbcpr_g1/G1FBCPR/checkpoint \
+  --num-envs 40 \
+  --tracking-eval-num-envs 40 \
+  --tracking-eval-max-motions 40 \
+  --tracking-eval-max-steps 200 \
+  --assignment-limit 16 \
+  --device cuda
+```
+
 ## G1 FB-CPR MuJoCo Rollout
 
 This viewer does not start IsaacLab. It loads the trained FB-CPR checkpoint, reads LAFAN `.npz` motions directly, and rolls the policy in MuJoCo with the BFM-Zero G1 XML.
@@ -202,10 +216,10 @@ Headless smoke:
 ```bash
 python scripts/tracking_inference_fbcpr_g1_mujoco.py \
   --headless \
-  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr_g1/BB963303D1/checkpoint \
+  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr_g1/G1FBCPR/checkpoint \
   --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan \
   --motion-index 0 \
-  --num-steps 120 \
+  --num-steps 1000020 \
   --device cuda \
   --mean \
   --print-every 30
@@ -215,9 +229,9 @@ Interactive MuJoCo viewer:
 
 ```bash
 python scripts/tracking_inference_fbcpr_g1_mujoco.py \
-  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr_g1/BB963303D1/checkpoint \
+  --checkpoint /home/chn/hajimi/bfm_research/logs/tmp_fbcpr_g1/G1FBCPR/checkpoint \
   --motions /home/chn/hajimi/bfm_research/source/whole_body_tracking/bfm/data/lafan \
-  --motion-index 0 \
+  --motion-index 10 \
   --num-steps 20000000000 \
   --device cuda \
   --mean \
@@ -259,10 +273,14 @@ Training shows a total rollout tqdm bar by default; add `--no-progress` to disab
 ```bash
 python scripts/train_fbcpr_g1.py \
   --headless \
+  --run-name G1FBCPR-Aux \
   --device cuda \
   --agent-device cuda \
-  --use-wandb
+  --use-wandb \
+  --evaluate
 ```
+
+`--run-name` controls the default log folder and the W&B run name. For example, `--run-name G1FBCPR` writes to `logs/tmp_fbcpr_g1/G1FBCPR`; without it, the script keeps using a random folder name. `--work-dir /path/to/run` still overrides the full output path.
 
 The default Aux reward terms are `penalty_torques`, `penalty_action_rate`, `limits_dof_pos`, `limits_torque`, `penalty_undesired_contact`, `penalty_feet_ori`, `penalty_ankle_roll`, and `penalty_slippage`. Training logs include `train/Q_aux`, `train/aux_critic_loss`, `train/mean_aux_reward`, and `train/aux_rew/...`.
 
@@ -272,9 +290,12 @@ To force the old non-Aux FB-CPR agent:
 python scripts/train_fbcpr_g1.py \
   --headless \
   --device cuda \
+  --run-name G1FBCPR-retrain \
   --agent-device cuda \
   --agent-class-entry-point agents.metamotivo.fb_cpr:FBcprAgent \
-  --agent-config-builder-entry-point bfm.config.fb_cpr:build_fbcpr_agent_config
+  --agent-config-builder-entry-point bfm.config.fb_cpr:build_fbcpr_agent_config \
+  --use-wandb \
+  --evaluate
 ```
 
 Config-default run with tracking eval:
@@ -418,6 +439,22 @@ python scripts/train_fbcpr_humenv.py \
 
 Eval metrics are logged under `eval/tracking/*` in W&B, for example `eval/tracking/obs_emd`, `eval/tracking/obs_distance`, or G1-specific `eval/tracking/body_pos_mean`.
 `--tracking-eval-max-steps` limits the IsaacLab tracking eval rollout length.
+G1 tracking eval evenly repeats the selected motions across the vectorized envs in each chunk. One chunk runs until the longest selected motion has been covered, optionally capped by `--tracking-eval-max-steps`; shorter motions loop with modulo frame indexing.
 HumEnv defaults to an IsaacLab-local tracking evaluator that emits MetaMotivo-style names such as `eval/tracking/distance`, `eval/tracking/proximity`, `eval/tracking/emd`, and PHC metrics when the obs layout supports them.
 The original MetaMotivo HumEnv bench path is also available with `--tracking-eval-entry-point bfm.tasks.humenv.eval.metamotivo_tracking:make_tracking_evaluator`; it requires the `humenv` package or `/home/chn/hajimi/humenv` on `PYTHONPATH`.
 To add another task later, point `--runner-cfg-entry-point` at a config class that provides the same entry point fields instead of editing the training lifecycle.
+
+G1 eval parallel-assignment debug:
+
+```bash
+python scripts/debug_g1_eval_parallel.py \
+  --checkpoint logs/tmp_fbcpr_g1/G1FBCPR/checkpoint \
+  --num-envs 30 \
+  --tracking-eval-num-envs 30 \
+  --tracking-eval-max-motions 50 \
+  --tracking-eval-max-steps 4000000 \
+  --assignment-limit 16 \
+  --device cuda
+```
+
+This script builds the G1 env, loads the trained G1 FB-CPR checkpoint by default, calls `EvalHook.on_step_end()`, and prints which vectorized env is assigned to which LAFAN motion. Add `--zero-agent` only when you want a cheap no-policy smoke. In normal training, add `--tracking-eval-print-assignments` if you want the same assignment table.

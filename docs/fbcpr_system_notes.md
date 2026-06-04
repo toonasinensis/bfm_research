@@ -58,6 +58,14 @@ Training outputs must stay under `logs/`:
 
 The default `make_work_dir()` now writes to those folders. Do not create new root-level `tmp_fbcpr*` folders. If a command passes `--work-dir`, keep it under `logs/` unless there is a specific reason not to.
 
+Each new training run writes reproducibility metadata under:
+
+```text
+<work_dir>/provenance/
+```
+
+This folder includes the actual argv/config, git commit/branch/status, tracked diff, staged diff, untracked file list, and a lightweight source snapshot. Use this before comparing curves across runs; old runs without this folder may have unrecoverable code differences even when `config.json` looks similar.
+
 Important local checkpoints currently used in examples:
 
 - HumEnv local: `logs/tmp_fbcpr/B13105BCD7/checkpoint`
@@ -271,6 +279,33 @@ eval/tracking/body_rot_mean
 eval/tracking/done_rate
 eval/tracking/nan_count
 ```
+
+G1 eval evenly repeats the selected motions across vectorized envs in a chunk. Time advances serially inside each env, so one chunk costs about the longest selected motion length, capped by `tracking_eval_max_steps` when it is positive. Shorter motions loop with modulo frame indexing instead of causing a random command resample.
+
+Do not wrap IsaacLab eval `env.reset()`, command writes, observation computation, or `env.step()` in `torch.inference_mode()`. A full G1 eval once reproduced a post-eval training stop with:
+
+```text
+RuntimeError: Inplace update to inference tensor outside InferenceMode is not allowed
+```
+
+Use `torch.no_grad()` only around FB-CPR model forward calls (`tracking_inference()` and `act()`). Env state updates must stay in normal tensor mode so training can continue after `EvalHook` and `CheckpointHook`.
+
+To verify the vectorized assignment directly, run:
+
+```bash
+python scripts/debug_g1_eval_parallel.py \
+  --headless \
+  --checkpoint logs/tmp_fbcpr_g1/G1FBCPR/checkpoint \
+  --num-envs 8 \
+  --tracking-eval-num-envs 8 \
+  --tracking-eval-max-motions 4 \
+  --tracking-eval-max-steps 4 \
+  --device cuda
+```
+
+The script creates the G1 env, loads the trained G1 FB-CPR checkpoint by default, calls `EvalHook`, and prints the env-to-motion table for each eval chunk. The same table can be enabled during training with `--tracking-eval-print-assignments`.
+
+Use `--run-name <name>` on training scripts to get stable output paths and W&B names. For G1, `--run-name G1FBCPR` writes to `logs/tmp_fbcpr_g1/G1FBCPR`; `--work-dir` still overrides the whole path when needed.
 
 HumEnv eval has an IsaacLab-local path and an optional MetaMotivo bench path:
 
